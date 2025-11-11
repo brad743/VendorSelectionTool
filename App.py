@@ -32,8 +32,8 @@ def calculate_scores(vendor_df, criteria_df):
     criteria_df.columns = [normalize_case(c) for c in criteria_df.columns]
 
     # Mappings from criteria file
-    func_to_req = dict(zip(criteria_df["function"], criteria_df["requirement"]))
-    func_to_area = dict(zip(criteria_df["function"], criteria_df["business area"]))
+    func_to_req = dict(zip(criteria_df["Function"], criteria_df["Requirement"]))
+    func_to_area = dict(zip(criteria_df["Function"], criteria_df["Business Area"]))
 
     func_to_req = {normalize_case(k): normalize_case(v) for k, v in func_to_req.items()}
     func_to_area = {normalize_case(k): v for k, v in func_to_area.items()}
