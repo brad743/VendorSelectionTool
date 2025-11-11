@@ -1,14 +1,12 @@
+import streamlit as st
 import pandas as pd
-import os
+import io
 
 # -------------------------------
 # CONFIGURATION
 # -------------------------------
 VENDOR_FILE = "Connected Booking System Evaluation Template (NDA).xlsx - Scoring Upload.csv"
-SUMMARY_OUTPUT = "vendor_scores_summary.csv"
-DETAILED_OUTPUT = "vendor_scores_detailed.csv"
 
-# Requirement weight mapping
 REQUIREMENT_WEIGHTS = {
     "critical": 4,
     "important": 3,
@@ -17,51 +15,34 @@ REQUIREMENT_WEIGHTS = {
     "not required": 0
 }
 
-# Vendor response scoring
 RESPONSE_SCORES = {
     "yes": 1,
-    "no": 0,
-    "not provided": 0.5
+    "not provided": 0.5,
+    "no": 0
 }
 
-
+# -------------------------------
+# HELPER FUNCTIONS
+# -------------------------------
 def normalize_case(s):
     return str(s).strip().lower()
 
-
-def main():
-    print("\n=== Vendor Functionality Scoring Tool ===")
-    print(f"Loading fixed vendor file: {VENDOR_FILE}")
-
-    # Load vendor functionality file
-    vendor_df = pd.read_csv(VENDOR_FILE)
+def calculate_scores(vendor_df, criteria_df):
     vendor_df.columns = [normalize_case(c) for c in vendor_df.columns]
-
-    # Ask for system criteria file
-    criteria_path = input("\nEnter path to new system criteria CSV: ").strip()
-    if not os.path.exists(criteria_path):
-        print(f"Error: File not found: {criteria_path}")
-        return
-
-    criteria_df = pd.read_csv(criteria_path)
     criteria_df.columns = [normalize_case(c) for c in criteria_df.columns]
 
-    # Prepare mappings
-    function_to_req = dict(zip(criteria_df["function"], criteria_df["requirement"]))
-    function_to_area = dict(zip(criteria_df["function"], criteria_df["business area"]))
+    # Mappings from criteria file
+    func_to_req = dict(zip(criteria_df["function"], criteria_df["requirement"]))
+    func_to_area = dict(zip(criteria_df["function"], criteria_df["business area"]))
 
-    # Normalize keys
-    function_to_req = {normalize_case(k): normalize_case(v) for k, v in function_to_req.items()}
-    function_to_area = {normalize_case(k): v for k, v in function_to_area.items()}
+    func_to_req = {normalize_case(k): normalize_case(v) for k, v in func_to_req.items()}
+    func_to_area = {normalize_case(k): v for k, v in func_to_area.items()}
 
-    vendor_scores = []
-    detailed_records = []
+    vendor_scores, detailed_records = [], []
 
-    # Iterate through each vendor
     for _, row in vendor_df.iterrows():
         vendor_name = row["vendor"]
-        total_weight = 0
-        total_score = 0
+        total_score, total_weight = 0, 0
         area_scores = {}
 
         for func_col in vendor_df.columns:
@@ -69,65 +50,105 @@ def main():
                 continue
 
             func_name = normalize_case(func_col)
-            if func_name not in function_to_req:
-                continue  # skip functions not in criteria
-
-            req = function_to_req[func_name]
-            req_weight = REQUIREMENT_WEIGHTS.get(req, 0)
-            if req_weight == 0:
+            if func_name not in func_to_req:
                 continue
 
-            response = normalize_case(row[func_col])
-            response_score = RESPONSE_SCORES.get(response, 0)
-            weighted_score = response_score * req_weight
+            req = func_to_req[func_name]
+            weight = REQUIREMENT_WEIGHTS.get(req, 0)
+            if weight == 0:
+                continue
+
+            resp = normalize_case(row[func_col])
+            resp_score = RESPONSE_SCORES.get(resp, 0)
+            weighted_score = resp_score * weight
 
             total_score += weighted_score
-            total_weight += req_weight
+            total_weight += weight
 
-            # Determine business area
-            area = function_to_area.get(func_name, "Unspecified")
+            area = func_to_area.get(func_name, "Unspecified")
             if area not in area_scores:
                 area_scores[area] = {"score": 0, "weight": 0}
             area_scores[area]["score"] += weighted_score
-            area_scores[area]["weight"] += req_weight
+            area_scores[area]["weight"] += weight
 
-            # Determine meets criteria
-            meets = "Meets Criteria" if (response_score * 100) >= 75 else "Does Not Meet"
-
+            meets = "Meets Criteria" if (resp_score * 100) >= 75 else "Does Not Meet"
             detailed_records.append({
                 "Vendor": vendor_name,
                 "Business Area": area,
                 "Function": func_col,
                 "Requirement": req,
                 "Response": row[func_col],
-                "Weighted Score": round((weighted_score / req_weight) * 100 if req_weight > 0 else 0, 2),
+                "Weighted Score": round((weighted_score / weight) * 100 if weight > 0 else 0, 2),
                 "Meets Criteria": meets
             })
 
         vendor_total_pct = round((total_score / total_weight) * 100 if total_weight > 0 else 0, 2)
         summary_row = {"Vendor": vendor_name, "Total Score (%)": vendor_total_pct}
-
-        # Compute area-level averages
         for area, vals in area_scores.items():
             area_pct = round((vals["score"] / vals["weight"]) * 100 if vals["weight"] > 0 else 0, 2)
             summary_row[f"{area} (%)"] = area_pct
-
         vendor_scores.append(summary_row)
 
-    # Convert to DataFrames
-    summary_df = pd.DataFrame(vendor_scores)
-    detailed_df = pd.DataFrame(detailed_records)
-
-    # Save outputs
-    summary_df.to_csv(SUMMARY_OUTPUT, index=False)
-    detailed_df.to_csv(DETAILED_OUTPUT, index=False)
-
-    print("\n✅ Scoring complete!")
-    print(f"Summary saved to: {SUMMARY_OUTPUT}")
-    print(f"Detailed results saved to: {DETAILED_OUTPUT}")
-    print("\nTop Vendors by Total Score:")
-    print(summary_df.sort_values("Total Score (%)", ascending=False).head(5).to_string(index=False))
+    return pd.DataFrame(vendor_scores), pd.DataFrame(detailed_records)
 
 
-if __name__ == "__main__":
-    main()
+def convert_df(df):
+    return df.to_csv(index=False).encode("utf-8")
+
+
+# -------------------------------
+# STREAMLIT APP
+# -------------------------------
+st.set_page_config(page_title="Vendor Functionality Scoring", layout="wide")
+
+st.title("📊 Vendor Functionality Scoring Tool")
+
+st.markdown("""
+Upload a **System Criteria CSV** to score vendors against the fixed vendor functionality file.
+""")
+
+# Load fixed vendor file
+try:
+    vendor_df = pd.read_csv(VENDOR_FILE)
+except Exception as e:
+    st.error(f"Error loading vendor file: {e}")
+    st.stop()
+
+criteria_file = st.file_uploader("Upload your System Criteria CSV", type=["csv"])
+
+if criteria_file is not None:
+    criteria_df = pd.read_csv(criteria_file)
+
+    with st.spinner("Calculating scores..."):
+        summary_df, detailed_df = calculate_scores(vendor_df, criteria_df)
+
+    st.success("✅ Scoring complete!")
+
+    st.subheader("Overall Vendor Rankings")
+    st.dataframe(summary_df.sort_values("Total Score (%)", ascending=False), use_container_width=True)
+
+    # Business area averages
+    area_cols = [c for c in summary_df.columns if c not in ["Vendor", "Total Score (%)"]]
+    if area_cols:
+        st.subheader("Business Area Breakdown")
+        st.dataframe(summary_df[["Vendor"] + area_cols], use_container_width=True)
+
+    st.subheader("Detailed Results")
+    st.dataframe(detailed_df, use_container_width=True)
+
+    # Download buttons
+    st.download_button(
+        label="⬇️ Download Summary CSV",
+        data=convert_df(summary_df),
+        file_name="vendor_scores_summary.csv",
+        mime="text/csv"
+    )
+
+    st.download_button(
+        label="⬇️ Download Detailed CSV",
+        data=convert_df(detailed_df),
+        file_name="vendor_scores_detailed.csv",
+        mime="text/csv"
+    )
+else:
+    st.info("Please upload a System Criteria CSV file to begin scoring.")
